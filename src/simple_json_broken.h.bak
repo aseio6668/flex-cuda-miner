@@ -1,0 +1,268 @@
+/**
+ * Simple JSON parser for mining pool communication
+ * Used when system jsoncpp is not available
+ */
+
+#ifdef SIMPLE_JSON_PARSER
+
+#ifndef SIMPLE_JSON_H
+#define SIMPLE_JSON_H
+
+#include <string>
+#include <map>
+#include <vector>
+#include <sstream>
+
+namespace Json {
+    class Value {
+    private:
+        std::string stringValue_;
+        int intValue_;
+        std::vector<Value> arrayValue_;
+        std::map<std::string, Value> objectValue_;
+        bool isString_;
+        bool isInt_;
+        bool isArray_;
+        bool isObject_;
+        bool isNull_;
+        
+    public:
+        Value() : intValue_(0), isString_(false), isInt_(false), isArray_(false), isObject_(false), isNull_(true) {}
+        Value(const std::string& str) : stringValue_(str), intValue_(0), isString_(true), isInt_(false), isArray_(false), isObject_(false), isNull_(false) {}
+        Value(int val) : intValue_(val), isString_(false), isInt_(true), isArray_(false), isObject_(false), isNull_(false) {}
+        
+        bool isString() const { return isString_; }
+        bool isInt() const { return isInt_; }
+        bool isArray() const { return isArray_; }
+        bool isObject() const { return isObject_; }
+        bool isNull() const { return isNull_; }
+        
+        std::string asString() const { return stringValue_; }
+        int asInt() const { return intValue_; }
+        
+        bool isMember(const std::string& key) const {
+            return objectValue_.find(key) != objectValue_.end();
+        }
+        
+        Value& operator[](const std::string& key) {
+            isObject_ = true;
+            isNull_ = false;
+            return objectValue_[key];
+        }
+        
+        const Value& operator[](const std::string& key) const {
+            static Value nullValue;
+            auto it = objectValue_.find(key);
+            return it != objectValue_.end() ? it->second : nullValue;
+        }
+        
+        Value& operator=(int val) {
+            intValue_ = val;
+            isInt_ = true;
+            isString_ = false;
+            isArray_ = false;
+            isObject_ = false;
+            isNull_ = false;
+            return *this;
+        }
+        
+        void append(const Value& value) {
+            isArray_ = true;
+            isNull_ = false;
+            arrayValue_.push_back(value);
+        }
+        
+        size_t size() const { return arrayValue_.size(); }
+        Value& operator[](size_t index) { return arrayValue_[index]; }
+        const Value& operator[](size_t index) const { return arrayValue_[index]; }
+        
+        // Iterator support for range-based for loops        std::vector<Value>::iterator begin() { return arrayValue_.begin(); }
+        std::vector<Value>::iterator end() { return arrayValue_.end(); }
+        std::vector<Value>::const_iterator begin() const { return arrayValue_.begin(); }
+        std::vector<Value>::const_iterator end() const { return arrayValue_.end(); }
+        
+        static Value null;
+    private:
+        std::string stringValue_;
+        int intValue_;
+        std::vector<Value> arrayValue_;
+        std::map<std::string, Value> objectValue_;
+        bool isString_;
+        bool isInt_;
+        bool isArray_;
+        bool isObject_;
+        bool isNull_;
+    };
+    
+    // Helper functions for array creation
+    inline Value makeArray() {
+        Value arr;
+        arr.isArray_ = true;
+        arr.isNull_ = false;
+        return arr;    }
+    
+    // Initialize static member
+    Value Value::null;
+
+    class Reader {
+    public:
+        bool parse(const std::string& json, Value& root) {
+            // Very simple JSON parser - handles basic cases for mining pool
+            std::string trimmed = trim(json);
+            
+            if (trimmed.empty()) return false;
+            
+            if (trimmed[0] == '{') {
+                return parseObject(trimmed, root);
+            } else if (trimmed[0] == '[') {
+                return parseArray(trimmed, root);
+            }
+            
+            return false;
+        }
+        
+    private:
+        std::string trim(const std::string& str) {
+            size_t first = str.find_first_not_of(" \t\n\r");
+            if (first == std::string::npos) return "";
+            size_t last = str.find_last_not_of(" \t\n\r");
+            return str.substr(first, (last - first + 1));
+        }
+        
+        bool parseObject(const std::string& json, Value& root) {
+            // Simple object parser
+            size_t pos = 1; // Skip opening brace
+            
+            while (pos < json.length() && json[pos] != '}') {
+                // Skip whitespace
+                while (pos < json.length() && isspace(json[pos])) pos++;
+                
+                if (json[pos] == '}') break;
+                if (json[pos] == ',') { pos++; continue; }
+                
+                // Parse key
+                if (json[pos] != '"') return false;
+                pos++; // Skip quote
+                
+                std::string key;
+                while (pos < json.length() && json[pos] != '"') {
+                    key += json[pos++];
+                }
+                pos++; // Skip closing quote
+                
+                // Skip whitespace and colon
+                while (pos < json.length() && (isspace(json[pos]) || json[pos] == ':')) pos++;
+                
+                // Parse value
+                Value value;
+                if (json[pos] == '"') {
+                    // String value
+                    pos++; // Skip quote
+                    std::string strValue;
+                    while (pos < json.length() && json[pos] != '"') {
+                        strValue += json[pos++];
+                    }
+                    pos++; // Skip closing quote
+                    value = Value(strValue);
+                } else if (json[pos] == '[') {
+                    // Array value - simplified
+                    parseArray(json.substr(pos), value);
+                    // Skip to end of array (simplified)
+                    int bracketCount = 0;
+                    while (pos < json.length()) {
+                        if (json[pos] == '[') bracketCount++;
+                        if (json[pos] == ']') bracketCount--;
+                        pos++;
+                        if (bracketCount == 0) break;
+                    }
+                } else {
+                    // Other values (numbers, booleans, null) - treat as string
+                    std::string otherValue;
+                    while (pos < json.length() && json[pos] != ',' && json[pos] != '}') {
+                        if (!isspace(json[pos])) otherValue += json[pos];
+                        pos++;
+                    }
+                    value = Value(otherValue);
+                }
+                
+                root[key] = value;
+            }
+            
+            return true;
+        }
+        
+        bool parseArray(const std::string& json, Value& root) {
+            // Simple array parser
+            size_t pos = 1; // Skip opening bracket
+            
+            while (pos < json.length() && json[pos] != ']') {
+                // Skip whitespace
+                while (pos < json.length() && isspace(json[pos])) pos++;
+                
+                if (json[pos] == ']') break;
+                if (json[pos] == ',') { pos++; continue; }
+                
+                Value value;
+                if (json[pos] == '"') {
+                    // String value
+                    pos++; // Skip quote
+                    std::string strValue;
+                    while (pos < json.length() && json[pos] != '"') {
+                        strValue += json[pos++];
+                    }
+                    pos++; // Skip closing quote
+                    value = Value(strValue);
+                } else {
+                    // Other values
+                    std::string otherValue;
+                    while (pos < json.length() && json[pos] != ',' && json[pos] != ']') {
+                        if (!isspace(json[pos])) otherValue += json[pos];
+                        pos++;
+                    }
+                    value = Value(otherValue);
+                }
+                
+                root.append(value);
+            }
+            
+            return true;
+        }
+    };
+      class StreamWriterBuilder {
+    public:
+        StreamWriterBuilder& operator[](const std::string& key) { return *this; }
+    };
+    
+    // Forward declaration
+    static void writeValue(std::ostringstream& ss, const Value& value);
+    
+    std::string writeString(const StreamWriterBuilder& builder, const Value& value) {
+        // Simple JSON writer
+        std::ostringstream ss;
+        writeValue(ss, value);
+        return ss.str();
+    }
+    
+    static void writeValue(std::ostringstream& ss, const Value& value) {
+        if (value.isNull()) {
+            ss << "null";
+        } else if (value.isString()) {
+            ss << "\"" << value.asString() << "\"";
+        } else if (value.isArray()) {
+            ss << "[";
+            for (size_t i = 0; i < value.size(); i++) {
+                if (i > 0) ss << ",";
+                writeValue(ss, value[i]);
+            }
+            ss << "]";
+        } else if (value.isObject()) {
+            ss << "{";
+            // Note: This would need proper object iteration in real implementation
+            ss << "}";
+        }
+    }
+}
+
+#endif // SIMPLE_JSON_H
+
+#endif // SIMPLE_JSON_PARSER
